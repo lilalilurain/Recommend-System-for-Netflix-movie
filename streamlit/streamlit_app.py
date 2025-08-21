@@ -34,10 +34,9 @@ def preview_txt_from_bytes(file_bytes: bytes, n_preview: int = 50) -> pd.DataFra
     if not file_bytes:
         return None
 
-    # Giới hạn preview tối đa 1MB
     preview_data = file_bytes[:1 * 1024 * 1024]  # 1MB
-
     encodings_to_try = ['utf-8', 'latin1', 'cp1252', 'ISO-8859-1']
+
     for encoding in encodings_to_try:
         try:
             txt_io = StringIO(preview_data.decode(encoding, errors="ignore"))
@@ -71,7 +70,7 @@ def load_titles_csv_from_bytes(file_bytes: bytes) -> pd.DataFrame | None:
                 bio,
                 header=None,
                 names=["movieId", "year", "title"],
-                usecols=[0, 1, 2],  # Chỉ lấy 3 cột đầu
+                usecols=[0, 1, 2],
                 encoding=encoding
             )
 
@@ -136,16 +135,32 @@ with colB:
     else:
         st.caption("Chưa upload hoặc file rỗng.")
 
-st.subheader("🔍 Tra cứu tên phim theo movieId")
+# =========================
+# Tra cứu phim
+# =========================
+st.subheader("🔍 Tra cứu phim")
 if titles_df is not None and not titles_df.empty:
-    q_id = st.number_input("movieId", min_value=1, value=1)
-    found = titles_df.loc[titles_df["movieId"] == int(q_id)]
-    if not found.empty:
-        row = found.iloc[0]
-        yr = "" if pd.isna(row.get("year")) else int(row.get("year"))
-        st.success(f"🎬 {row['title']}{f' ({yr})' if yr else ''}")
-    else:
-        st.info("Không thể tìm thấy movieId này trong danh sách tiêu đề.")
+    tab1, tab2 = st.tabs(["Theo movieId", "Theo tên phim"])
+
+    with tab1:
+        q_id = st.number_input("Nhập movieId", min_value=1, value=1)
+        found = titles_df.loc[titles_df["movieId"] == int(q_id)]
+        if not found.empty:
+            row = found.iloc[0]
+            yr = "" if pd.isna(row.get("year")) else int(row.get("year"))
+            st.success(f"🎥 {row['title']}{f' ({yr})' if yr else ''}")
+        else:
+            st.info("Không tìm thấy movieId này trong danh sách.")
+
+    with tab2:
+        q_title = st.text_input("Nhập tên phim", value="")
+        if q_title.strip():
+            matches = titles_df[titles_df["title"].str.lower().str.contains(q_title.strip().lower())]
+            if not matches.empty:
+                st.write(f"🔎 Tìm thấy {len(matches)} kết quả:")
+                st.dataframe(matches[["movieId", "title", "year"]], use_container_width=True)
+            else:
+                st.warning("Không tìm thấy phim nào khớp với tên đã nhập.")
 else:
     st.caption("Cần upload movie_tittles.csv để tra cứu.")
 
@@ -154,5 +169,4 @@ st.markdown("---")
 # =========================
 # Run pipeline
 # =========================
-# Lưu ý: Cần chỉnh thêm phần nhập tham số trước khi chạy pipeline
 st.warning("Cần bổ sung form nhập tham số cho pipeline trước khi chạy.")
