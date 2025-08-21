@@ -1,101 +1,169 @@
-import streamlit as st
+# app.py
 import argparse
+import os
+from io import BytesIO, StringIO
+from pathlib import Path
+import re
+
+import pandas as pd
+import streamlit as st
+
 from main import run_pipeline
 
-st.set_page_config(page_title="Netflix Recommender", layout="wide")
+# =========================
+# Page & constants
+# =========================
+st.set_page_config(page_title="Hệ thống gợi ý phim cho Netflix", page_icon="🎬", layout="wide")
+st.title("🎬 Hệ thống đề xuất phim Netflix")
+st.caption("Hệ thống gợi ý phim Netflix có khả năng phát hiện và giảm thiểu đánh giá giả (shilling attacks).")
 
-st.title("🎬 Netflix Recommendation System")
-st.write("Hệ gợi ý phim Netflix với phát hiện & giảm thiểu đánh giá giả (shilling attacks).")
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# ======================
-# Sidebar config
-# ======================
-st.sidebar.header("⚙️ Cấu hình")
+# =========================
+# Helpers
+# =========================
+def save_uploaded_file(uploaded_file, dest_path: Path) -> Path:
+    with open(dest_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return dest_path
 
-data_dir = st.sidebar.text_input("Thư mục dữ liệu", "data/ml-latest-small")
 
-# Shilling attacks
-st.sidebar.subheader("Shilling Attack")
-attack_type = st.sidebar.selectbox("Kiểu tấn công", ["random", "average", "bandwagon"])
-n_attack_users = st.sidebar.slider("Số user tấn công", 50, 500, 200, 50)
-filler_ratio = st.sidebar.slider("Filler ratio", 0.01, 0.5, 0.1, 0.01)
-target_movie_id = st.sidebar.number_input("Target movie id", min_value=1, value=1)
+@st.cache_data(show_spinner=False)
+def preview_txt_from_bytes(file_bytes: bytes, n_preview: int = 50) -> pd.DataFrame | None:
+    if not file_bytes:
+        return None
 
-# Detector
-st.sidebar.subheader("Phát hiện giả")
-detector = st.sidebar.selectbox("Detector", ["isolation_forest", "random_forest"])
-contamination = st.sidebar.slider("Contamination", 0.01, 0.5, 0.05, 0.01)
+    preview_data = file_bytes[:1 * 1024 * 1024]  # 1MB
+    encodings_to_try = ['utf-8', 'latin1', 'cp1252', 'ISO-8859-1']
 
-# Suspicious handling
-suspicious_action = st.sidebar.selectbox("Xử lý user nghi ngờ", ["filter", "downweight"])
-downweight = st.sidebar.slider("Trọng số khi downweight", 0.1, 1.0, 0.5, 0.1)
+    for encoding in encodings_to_try:
+        try:
+            txt_io = StringIO(preview_data.decode(encoding, errors="ignore"))
+            separators = [",", "\t", ";", "::", "|", r'\s+']
+            for sep in separators:
+                try:
+                    df = pd.read_csv(txt_io, sep=sep, nrows=n_preview, engine='python',
+                                     header=None, names=["userID", "movieID", "rating", "date"])
+                    if df.shape[1] == 4:
+                        return df
+                except Exception:
+                    txt_io.seek(0)
+                    continue
+        except UnicodeDecodeError:
+            continue
+    return None
 
-# Recommender
-st.sidebar.subheader("Mô hình gợi ý")
-recommender = st.sidebar.selectbox("Recommender", ["lọc cộng tác", "phép lai hybrid"])
-alpha = st.sidebar.slider("Alpha (chỉ dùng cho hybrid)", 0.0, 1.0, 0.5, 0.1)
 
-# Model params
-st.sidebar.subheader("Tham số huấn luyện")
-factors = st.sidebar.slider("Latent factors", 10, 200, 20, 10)
-lr = st.sidebar.number_input("Learning rate", 0.001, 0.1, 0.01, 0.001)
-reg = st.sidebar.number_input("Regularization", 0.0, 0.1, 0.02, 0.01)
-epochs = st.sidebar.slider("Epochs", 5, 50, 10, 5)
+@st.cache_data(show_spinner=False)
+def load_titles_csv_from_bytes(file_bytes: bytes) -> pd.DataFrame | None:
+    if not file_bytes:
+        return None
 
-# Eval params
-st.sidebar.subheader("Đánh giá")
-topk = st.sidebar.slider("Top-K", 5, 20, 10, 1)
-like_threshold = st.sidebar.slider("Ngưỡng like", 1.0, 5.0, 4.0, 0.5)
+    bio = BytesIO(file_bytes)
+    encodings_to_try = ['utf-8', 'latin1', 'cp1252', 'ISO-8859-1']
 
-seed = st.sidebar.number_input("Random seed", value=42)
+    for encoding in encodings_to_try:
+        try:
+            bio.seek(0)
+            df = pd.read_csv(
+                bio,
+                header=None,
+                names=["movieId", "year", "title"],
+                usecols=[0, 1, 2],
+                encoding=encoding
+            )
 
-# ======================
-# Run pipeline
-# ======================
-if st.sidebar.button("🚀 Run experiment"):
-    args = argparse.Namespace(
-        data_dir=data_dir,
-        nrows=None,
-        test_ratio=0.2,
-        simulate_attacks=True,
-        attack_type=attack_type,
-        n_attack_users=n_attack_users,
-        filler_ratio=filler_ratio,
-        target_movie_id=target_movie_id,
-        min_rating=1.0,
-        max_rating=5.0,
-        detector=detector,
-        contamination=contamination,
-        suspicious_action=suspicious_action,
-        downweight=downweight,
-        factors=factors,
-        lr=lr,
-        reg=reg,
-        epochs=epochs,
-        alpha=alpha,
-        recommender=recommender,
-        topk=topk,
-        like_threshold=like_threshold,
-        seed=seed
-    )
+            if df.shape[1] == 3:
+                df["movieId"] = pd.to_numeric(df["movieId"], errors="coerce")
+                df = df.dropna(subset=["movieId"]).astype({"movieId": "int64"})
 
-    with st.spinner("⏳ Đang chạy pipeline..."):
-        results, figs = run_pipeline(args, return_results=True)
+                if "year" in df.columns:
+                    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+                if "title" in df.columns:
+                    df["title"] = df["title"].astype(str).str.strip()
 
-    st.success("✅ Hoàn thành!")
+                return df
+        except Exception:
+            continue
 
-    # Show metrics
-    st.subheader("📊 Kết quả so sánh Baseline vs Cleaned")
-    st.json(results)
+    st.warning("Không thể đọc file CSV. Vui lòng kiểm tra lại mã hóa và cấu trúc.")
+    return None
 
-    # Show figures
-    if figs.get("confusion_matrix"):
-        st.subheader("Confusion Matrix")
-        st.image(figs["confusion_matrix"])
+# =========================
+# Sidebar – upload dữ liệu
+# =========================
+st.sidebar.header("⚙️ Cấu hình dữ liệu")
 
-    if figs.get("classification_metrics"):
-        st.subheader("Classification Metrics")
-        st.image(figs["classification_metrics"])
+dataset_file = st.sidebar.file_uploader(
+    "Tải lên **merged.txt** (userID,movieID,rating,date) — đã nâng giới hạn upload trong config",
+    type=["txt", "csv"],
+)
 
+titles_file = st.sidebar.file_uploader(
+    "Tải lên **movie_tittles.csv** (movieId,year,title – KHÔNG header)",
+    type=["csv"],
+)
+
+titles_df = load_titles_csv_from_bytes(titles_file.getvalue()) if titles_file else None
+if titles_df is not None:
+    st.sidebar.success(f"Đã đọc {len(titles_df):,} tiêu đề")
 else:
-    st.info("👉 Chọn tham số ở sidebar rồi bấm **Run experiment** để chạy.")
+    st.sidebar.info("Chưa tải titles.")
+    # =========================
+# Main preview & tra cứu
+# =========================
+st.info("Upload **merged.txt** và **movie_tittles.csv** ở thanh bên, sau đó nhấn **Chạy thử nghiệm** để chạy.")
+
+colA, colB = st.columns(2)
+with colA:
+    st.subheader("👀 Xem trước merged.txt")
+    if dataset_file is not None:
+        prev = preview_txt_from_bytes(dataset_file.getvalue())
+        if prev is not None:
+            st.dataframe(prev.head(20), use_container_width=True)
+        else:
+            st.caption("Không đọc được preview (file quá lớn hoặc định dạng không hợp lệ?).")
+    else:
+        st.caption("Chưa upload merged.txt.")
+
+with colB:
+    st.subheader("📋 Xem trước tiêu đề (movie_tittles.csv)")
+    if titles_df is not None and not titles_df.empty:
+        st.dataframe(titles_df.head(20), use_container_width=True)
+    else:
+        st.caption("Chưa upload hoặc file rỗng.")
+
+# =========================
+# Tra cứu phim
+# =========================
+st.subheader("🔍 Tra cứu phim")
+if titles_df is not None and not titles_df.empty:
+    tab1, tab2 = st.tabs(["Theo movieId", "Theo tên phim"])
+
+    with tab1:
+        q_id = st.number_input("Nhập movieId", min_value=1, value=1)
+        found = titles_df.loc[titles_df["movieId"] == int(q_id)]
+        if not found.empty:
+            row = found.iloc[0]
+            yr = "" if pd.isna(row.get("year")) else int(row.get("year"))
+            st.success(f"🎥 {row['title']}{f' ({yr})' if yr else ''}")
+        else:
+            st.info("Không tìm thấy movieId này trong danh sách.")
+
+    with tab2:
+        q_title = st.text_input("Nhập tên phim", value="")
+        if q_title.strip():
+            matches = titles_df[titles_df["title"].str.lower().str.contains(q_title.strip().lower())]
+            if not matches.empty:
+                st.write(f"🔎 Tìm thấy {len(matches)} kết quả:")
+                st.dataframe(matches[["movieId", "title", "year"]], use_container_width=True)
+            else:
+                st.warning("Không tìm thấy phim nào khớp với tên đã nhập.")
+else:
+    st.caption("Cần upload movie_tittles.csv để tra cứu.")
+
+st.markdown("---")
+
+# =========================
+# Run pipeline
