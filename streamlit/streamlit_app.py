@@ -165,6 +165,64 @@ else:
     st.caption("Cần upload movie_tittles.csv để tra cứu.")
 
 st.markdown("---")
+with st.form("params_form"):
+    st.subheader("⚙️ Tham số chạy thử nghiệm")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        recommender = st.selectbox("Thuật toán gợi ý", ["cf", "hybrid"])
+        detector = st.selectbox("Bộ phát hiện", ["random_forest", "isolation_forest"])
+        suspicious_action = st.selectbox("Xử lý user đáng ngờ", ["filter", "downweight"])
+        simulate_attacks = st.checkbox("Giả lập tấn công", value=True)
+
+    with col2:
+        epochs = st.number_input("Epochs", min_value=1, max_value=100, value=10)
+        factors = st.number_input("Số latent factors", min_value=1, max_value=200, value=20)
+        downweight = st.slider("Trọng số downweight", 0.1, 1.0, 0.5)
+        alpha = st.slider("Alpha (trong Hybrid)", 0.0, 1.0, 0.5)
+
+    submitted = st.form_submit_button("🚀 Chạy thử nghiệm")
+
+if submitted and dataset_file is not None:
+    with st.spinner("Đang chạy pipeline..."):
+        data_path = save_uploaded_file(dataset_file, UPLOAD_DIR / "merged.txt")
+
+        args = argparse.Namespace(
+            data_dir=UPLOAD_DIR,
+            nrows=None,
+            test_ratio=0.2,
+            simulate_attacks=simulate_attacks,
+            attack_type="random",
+            n_attack_users=200,
+            filler_ratio=0.1,
+            target_movie_id=1,
+            min_rating=1.0,
+            max_rating=5.0,
+            detector=detector,
+            contamination=0.05,
+            suspicious_action=suspicious_action,
+            downweight=downweight,
+            factors=factors,
+            lr=0.01,
+            reg=0.02,
+            epochs=epochs,
+            alpha=alpha,
+            recommender=recommender,
+            topk=10,
+            like_threshold=4.0,
+            seed=42,
+        )
+
+        results, figs = run_pipeline(args, return_results=True)
+        st.success("✅ Đã chạy xong!")
+
+        # Hiển thị kết quả
+        st.json(results)
+
+        if figs:
+            for name, path in figs.items():
+                st.image(path, caption=name)
+
 
 # =========================
 # Run pipeline
