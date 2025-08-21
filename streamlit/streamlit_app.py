@@ -1,0 +1,158 @@
+# app.py
+import argparse
+import os
+from io import BytesIO, StringIO
+from pathlib import Path
+import re
+
+import pandas as pd
+import streamlit as st
+
+from main import run_pipeline
+
+# =========================
+# Page & constants
+# =========================
+st.set_page_config(page_title="Hệ thống gợi ý phim cho Netflix", page_icon="🎬", layout="wide")
+st.title("🎬 Hệ thống đề xuất phim Netflix")
+st.caption("Hệ thống gợi ý phim Netflix có khả năng phát hiện và giảm thiểu đánh giá giả (shilling attacks).")
+
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# =========================
+# Helpers
+# =========================
+def save_uploaded_file(uploaded_file, dest_path: Path) -> Path:
+    with open(dest_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    return dest_path
+
+
+@st.cache_data(show_spinner=False)
+def preview_txt_from_bytes(file_bytes: bytes, n_preview: int = 50) -> pd.DataFrame | None:
+    if not file_bytes:
+        return None
+
+    # Giới hạn preview tối đa 1MB
+    preview_data = file_bytes[:1 * 1024 * 1024]  # 1MB
+
+    encodings_to_try = ['utf-8', 'latin1', 'cp1252', 'ISO-8859-1']
+    for encoding in encodings_to_try:
+        try:
+            txt_io = StringIO(preview_data.decode(encoding, errors="ignore"))
+            separators = [",", "\t", ";", "::", "|", r'\s+']
+            for sep in separators:
+                try:
+                    df = pd.read_csv(txt_io, sep=sep, nrows=n_preview, engine='python',
+                                     header=None, names=["userID", "movieID", "rating", "date"])
+                    if df.shape[1] == 4:
+                        return df
+                except Exception:
+                    txt_io.seek(0)
+                    continue
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def load_titles_csv_from_bytes(file_bytes: bytes) -> pd.DataFrame | None:
+    if not file_bytes:
+        return None
+
+    bio = BytesIO(file_bytes)
+    encodings_to_try = ['utf-8', 'latin1', 'cp1252', 'ISO-8859-1']
+
+    for encoding in encodings_to_try:
+        try:
+            bio.seek(0)
+            df = pd.read_csv(
+                bio,
+                header=None,
+                names=["movieId", "year", "title"],
+                usecols=[0, 1, 2],  # Chỉ lấy 3 cột đầu
+                encoding=encoding
+            )
+
+            if df.shape[1] == 3:
+                df["movieId"] = pd.to_numeric(df["movieId"], errors="coerce")
+                df = df.dropna(subset=["movieId"]).astype({"movieId": "int64"})
+
+                if "year" in df.columns:
+                    df["year"] = pd.to_numeric(df["year"], errors="coerce")
+                if "title" in df.columns:
+                    df["title"] = df["title"].astype(str).str.strip()
+
+                return df
+        except Exception:
+            continue
+
+    st.warning("Không thể đọc file CSV. Vui lòng kiểm tra lại mã hóa và cấu trúc.")
+    return None
+
+# =========================
+# Sidebar – upload dữ liệu
+# =========================
+st.sidebar.header("⚙️ Cấu hình dữ liệu")
+
+dataset_file = st.sidebar.file_uploader(
+    "Tải lên **merged.txt** (userID,movieID,rating,date) — đã nâng giới hạn upload trong config",
+    type=["txt", "csv"],
+)
+
+titles_file = st.sidebar.file_uploader(
+    "Tải lên **movie_tittles.csv** (movieId,year,title – KHÔNG header)",
+    type=["csv"],
+)
+
+titles_df = load_titles_csv_from_bytes(titles_file.getvalue()) if titles_file else None
+if titles_df is not None:
+    st.sidebar.success(f"Đã đọc {len(titles_df):,} tiêu đề")
+else:
+    st.sidebar.info("Chưa tải titles.")
+
+# =========================
+# Main preview & tra cứu
+# =========================
+st.info("Upload **merged.txt** và **movie_tittles.csv** ở thanh bên, sau đó nhấn **Chạy thử nghiệm** để chạy.")
+
+colA, colB = st.columns(2)
+with colA:
+    st.subheader("👀 Xem trước merged.txt")
+    if dataset_file is not None:
+        prev = preview_txt_from_bytes(dataset_file.getvalue())
+        if prev is not None:
+            st.dataframe(prev.head(20), use_container_width=True)
+        else:
+            st.caption("Không đọc được preview (file quá lớn hoặc định dạng không hợp lệ?).")
+    else:
+        st.caption("Chưa upload merged.txt.")
+
+with colB:
+    st.subheader("📋 Xem trước tiêu đề (movie_tittles.csv)")
+    if titles_df is not None and not titles_df.empty:
+        st.dataframe(titles_df.head(20), use_container_width=True)
+    else:
+        st.caption("Chưa upload hoặc file rỗng.")
+
+st.subheader("🔍 Tra cứu tên phim theo movieId")
+if titles_df is not None and not titles_df.empty:
+    q_id = st.number_input("movieId", min_value=1, value=1)
+    found = titles_df.loc[titles_df["movieId"] == int(q_id)]
+    if not found.empty:
+        row = found.iloc[0]
+        yr = "" if pd.isna(row.get("year")) else int(row.get("year"))
+        st.success(f"🎬 {row['title']}{f' ({yr})' if yr else ''}")
+    else:
+        st.info("Không thể tìm thấy movieId này trong danh sách tiêu đề.")
+else:
+    st.caption("Cần upload movie_tittles.csv để tra cứu.")
+
+st.markdown("---")
+
+# =========================
+# Run pipeline
+# =========================
+# Lưu ý: Cần chỉnh thêm phần nhập tham số trước khi chạy pipeline
+st.warning("Cần bổ sung form nhập tham số cho pipeline trước khi chạy.")

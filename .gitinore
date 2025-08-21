@@ -1,0 +1,27 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables
+.env
+
+# Data & outputs (không bắt buộc, nếu bạn muốn giữ dataset ở local thôi)
+data/
+outputs/
+*.csv
+*.zip
+merged_data.txt
+movie_titles.csv
+
+
+.venv/
+*.pkl
+*.txt
+__pycache__/
+*.csv
+*.json
+.DS_Store

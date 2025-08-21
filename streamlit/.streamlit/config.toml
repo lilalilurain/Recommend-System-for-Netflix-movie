@@ -1,0 +1,3 @@
+[server]
+# cho phép upload tới 2GB (tùy bạn chỉnh con số)
+maxUploadSize = 2048
