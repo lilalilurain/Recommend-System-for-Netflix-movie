@@ -129,7 +129,7 @@ downweight = st.sidebar.slider("Trọng số khi downweight", 0.1, 1.0, 0.5, 0.1
 
 # Recommender
 st.sidebar.subheader("Mô hình gợi ý")
-recommender = st.sidebar.selectbox("Recommender", ["cf", "hybrid"])
+recommender = st.sidebar.selectbox("Recommender", ["lọc cộng tác", "lọc bằng phép lai hybrid"])
 alpha = st.sidebar.slider("Alpha (chỉ dùng cho hybrid)", 0.0, 1.0, 0.5, 0.1)
 
 # Model params
